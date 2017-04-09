@@ -1,6 +1,6 @@
 <?php
 	/*
-	 * @author: Arpita Karkera
+	 * @author: Arpita Karkera, Sunaina Punyani
 	 * @date: 5th December, 2016
 	 * 
 	 * Sign Up page and logic
@@ -10,11 +10,8 @@
 	// authenticate
 	require_once(__DIR__ . '/../includes/authenticate.php');
 
-	// get the database constants
+	// connect to database
 	require_once(__DIR__ . '/../includes/dbconfig.php');
-
-	// connect to the database
-	$dbc = mysqli_connect(DB_HOST, DB_USER, DB_PASSWORD, DB_NAME);
 
 	$err_msg = '';
 
@@ -24,7 +21,7 @@
 			// grab the data
 			$first_name = mysqli_real_escape_string($dbc, trim($_POST['first_name']));
 			$last_name = mysqli_real_escape_string($dbc, trim($_POST['last_name']));
-			$username = mysqli_real_escape_string($dbc, trim($_POST['username']));
+			//$username = mysqli_real_escape_string($dbc, trim($_POST['username']));
 			$password1 = mysqli_real_escape_string($dbc, trim($_POST['password1']));
 			$password2 = mysqli_real_escape_string($dbc, trim($_POST['password2']));
 			$email = mysqli_real_escape_string($dbc, trim($_POST['email']));
@@ -35,44 +32,64 @@
 			$year = mysqli_real_escape_string($dbc, trim($_POST['year']));
 			$branch = mysqli_real_escape_string($dbc, trim($_POST['branch']));
 
-			if (!empty($first_name) && !empty($last_name) && !empty($username) && !empty($password1) && !empty($password2) && !empty($email) && !empty($id)) {
-				// make sure someone isn't registered with same username
-				$query = "SELECT user_id FROM users WHERE username = '$username'";
+			if (!empty($first_name) && !empty($last_name) && !empty($email) && !empty($password1) && !empty($password2) && !empty($id)) {
+				// make sure someone isn't registered with same email
+				$query = "SELECT user_id FROM users WHERE email = '$email'";
 				$result = mysqli_query($dbc, $query);
 				if (mysqli_num_rows($result) == 0) {
-					// username is unique
+					// email is unique
 					if ($password1 != $password2) // passwords don't match
 						$err_msg = 'The passwords don\'t match.';
-					if (!filter_var($email, FILTER_VALIDATE_EMAIL)) // email is invalid
+					else if (!filter_var($email, FILTER_VALIDATE_EMAIL)) // email is invalid
 						$err_msg = 'The email provided is invalid.';
-					if (!validate_contact($contact)) // contact is invalid
+					else if (!validate_contact($contact)) // contact is invalid
 						$err_msg = 'The contact number provided is invalid.';
+					else if (!validate_id($id)) // id is invalid
+						$err_msg = 'The ID provided is invalid.';
+					else if (!validate_name($first_name) || !validate_name($last_name)) // name is invalid
+						$err_msg = "Invalid name! Is your name really $first_name $last_name?";
 					else {
+						$first_name = ucfirst(strtolower($first_name));
+						$last_name = ucfirst(strtolower($last_name));
+						$hash = password_hash($password1, PASSWORD_BCRYPT);
+
 						// insert data into database
-						$query = "INSERT INTO users (username, password, id, first_name, last_name, email, contact, gender, programme, year, branch) VALUES ('$username', SHA('$password1'), '$id', '$first_name', '$last_name', '$email', '$contact', '$gender', '$programme', '$year', '$branch')";
-        				mysqli_query($dbc, $query);
-        				// login the user
-        				$query = "SELECT user_id FROM users WHERE username = '$username'";
-        				$result = mysqli_query($dbc, $query);
-        				$row = mysqli_fetch_array($result);
-        				$_SESSION['user_id'] = $row['user_id'];
-        				$_SESSION['username'] = $username;
+						$query = "INSERT INTO users (email, password, id, first_name, last_name, contact, gender, programme, year, branch, verified) VALUES ('$email', '$hash', '$id', '$first_name', '$last_name', '$contact', '$gender', $programme, $year, $branch, 0)";
+        				if (mysqli_query($dbc, $query)) {
+    					
+							// send activation mail
+							$query = "SELECT user_id FROM users WHERE email = '$email'";
+							$result = mysqli_query($dbc, $query);
+							$row = mysqli_fetch_array($result);
+							$user_id = $row['user_id'];
+							require_once(__DIR__ . '/../controls/mailer.php');
+							$activation_link = dirname((isset($_SERVER['HTTPS'])?'https://':'http://').$_SERVER['HTTP_HOST'].$_SERVER['PHP_SELF'])."/activate.php?id=".$user_id."&key=".md5(sha1($first_name.$last_name));
+							$to = $email;
+							$from = USER;
+							$from_name = NAME;
+							$subject = 'RegDesk Account Activation';
+							$body = "Hello $first_name!<br>To activate your VJTI RegDesk account click on the following link.<br><br><a href='$activation_link'>Activate</a><br><br>You can login to your account after activation.";
+							singlemail($to, $from, $from_name, $subject, $body);
 
-        				// redirect to confirmation page
-						header('Location: confirmsignup.php');
-
+							// display confirmation
+							header('Location: confirmsignup.php');
+						}
+						else {
+							echo mysqli_error($dbc);
+						}
 					}
 				}
 				else {
-					// username exits. ask user for a different one.
-					$err_msg = 'The username has been taken. Choose another one.';
+					// email exits. ask user for a different one.
+					$err_msg = 'The email id has been used. Choose another one. <a href="forgot.php">Forgot password?</a>';
 				}
 			}
 			else {
 				$err_msg = 'Please fill the required fields.';
 			}
 		}
-	}/*
+	}
+	/*
 	else {
 		// user is logged in so redirect to dashboard
 		header('Location: dashboard.php');
@@ -85,101 +102,181 @@
 
 		return false;
 	}
+
+	// function that validates id number. number should have 9 digits.
+	function validate_id($id) {
+		if (preg_match('/^\d{9}$/', $id))
+			return true;
+
+		return false;
+	}
+
+	function validate_name($name) {
+		return preg_match("/^[a-zA-Z'-]+$/", $name);
+	}
 ?>
 
-<!--Render header-->
-<?php
+	<!--Render header-->
+	<?php
 	$title = 'Sign Up';
 	require_once(__DIR__ . '/../includes/header.php');
 ?>
 
-<h1>Join VJTI-RegDesk</h1>
-<h3>Easy. Simple. Effective.</h3>
+		<div style="font-family: 'Raleway', sans-serif; padding-left: 6%; padding-top: 5%; padding-bottom: 3%; padding-right: 6%;">
+			<h1 style="font-weight:bold;color:rgb(12,73,109);">Join VJTI RegDesk</h1>
+			<h3 style="color:rgb(12,73,109);">Easy.&nbsp;&nbsp;Simple.&nbsp;&nbsp;Effective.</h3>
+			<hr style="height: 2px;">
+		</div>
+		<div class="container">
+			<h3 style="font-weight:bold;color:rgb(1,56,101);">Create your account</h3>
+			<div class="form-group">
+				<form class="form-horizontal" role="form" action="<?php echo htmlspecialchars($_SERVER['PHP_SELF']); ?>" method="POST">
+			</div>
+			<div class="form-group" style="color: red;">
+				<p>&nbsp;
+					<?php echo $err_msg; ?>&nbsp;</p>
+			</div>
+			<!--name-->
+			<div class="form-group">
+				<label for="usr">Name</label>
+				<br>
+				<div class="row">
+					<div class="col-sm-4">
+						<input class="form-control" type="text" id="usr" placeholder="First" name="first_name" required value="<?php if(isset($first_name)) echo $first_name; ?>">
+					</div>
+					<div class="col-sm-4">
+						<input class="form-control" type="text" id="usr" placeholder="Last" name="last_name" required value="<?php if(isset($last_name)) echo $last_name; ?>">
+					</div>
+				</div>
+			</div>
+			<br>
+			<!--email-->
+			<div class="form-group">
+				<label for="email">Email</label>
+				<br>
+				<div class="row">
+					<div class="col-sm-4">
+						<input class="form-control" type="email" id="email" name="email" placeholder="Your email address" required value="<?php if(isset($email)) echo $email; ?>">
+					</div>
+				</div>
+				<span class="help-block">This will be used for all further communications with you. If you don't have one, you should get one. Seriously.</span>
+			</div>
+			<br>
+			<!--password-->
+			<div class="form-group">
+				<label for="pwd">Password</label>
+				<br>
+				<div class="row">
+					<div class="col-sm-4">
+						<input class="form-control" type="password" name="password1" id="pwd" placeholder="Create a password" required>
+					</div>
+					<div class="col-sm-4">
+						<input class="form-control" type="password" name="password2" id="pwd" placeholder="Confirm password" required>
+					</div>
+				</div>
+				<span class="help-block">No rules. Just make sure it's not easy to crack.</span>
+			</div>
+			<br>
+			<!--contact-->
+			<div class="form-group">
+				<label for="cont">Contact</label>
+				<br>
+				<div class="row">
+					<div class="col-sm-4">
+						<input class="form-control" type="text" id="cont" name="contact" placeholder="Your mobile number" value="<?php if(isset($contact)) echo $contact; ?>">
+					</div>
+				</div>
+			</div>
+			<br>
+			<!--gender-->
+			<div class="form-group">
+				<label>Gender:</label>
+				<br>
+				<div class="row">
+					<div class="col-sm-4">
+						<input type="radio" name="gender" value="M" id="M"><label for="M" class="radio-inline">Male</label>
+					</div>
+					<div class="col-sm-4">
+						<input type="radio" name="gender" value="F" id="F"><label for="F" class="radio-inline">Female</label>
+					</div>
+				</div>
+			</div>
+			<br>
+			<br>
+			<!--id-->
+			<div class="form-group">
+				<label for="id">ID</label>
+				<br>
+				<div class="row">
+					<div class="col-sm-4">
+						<input class="form-control" type="text" name="id" id="id" placeholder="Your ID number" value="<?php if(isset($id)) echo $id; ?>">
+					</div>
+				</div>
+			</div>
+			<br>
+			<!--prog and year-->
+			<div class="form-group">
+				<label>Course Details</label>
+				<br><br>
+				<div class="row">
+					<div class="col-sm-4">
+						<label for="programme">Programme:</label>
 
-<div>
-<h3>Create your account</h3>
-<p><?php echo $err_msg; ?></p>
-<form action="<?php echo htmlspecialchars($_SERVER['PHP_SELF']); ?>" method="POST">
-	<fieldset>
-		<legend>Name</legend>
-		<input type="text" name="first_name" placeholder="First" required value="<?php if(isset($first_name)) echo $first_name; ?>">
-		<input type="text" name="last_name" placeholder="Last" required value="<?php if(isset($last_name)) echo $last_name; ?>">
-	</fieldset>
-
-	<fieldset>
-		<legend>Username</legend>
-		<input type="text" name="username" placeholder="Pick a username" required value="<?php if(isset($username)) echo $username; ?>">
-	</fieldset>
-
-	<fieldset>
-		<legend>Password</legend>
-		<input type="password" name="password1" placeholder="Create a password" required>
-		<input type="password" name="password2" placeholder="Confirm password" required>
-	</fieldset>
-
-	<fieldset>
-		<legend>e-mail</legend>
-		<input type="text" name="email" placeholder="Your email address" required value="<?php if(isset($email)) echo $email; ?>">
-	</fieldset>
-
-	<fieldset>
-		<legend>Contact</legend>
-		<input type="text" name="contact" placeholder="Your mobile number" value="<?php if(isset($contact)) echo $contact; ?>">
-	</fieldset>
-
-	<fieldset>
-		<legend>Gender</legend>
-		<input type="radio" name="gender" value="M" id="Male"><label for="Male">Male</label>
-		<input type="radio" name="gender" value="F" id="Female"><label for="Female">Female</label>
-	</fieldset>
-
-	<fieldset>
-		<legend>ID</legend>
-		<input type="text" name="id" placeholder="Your ID number" value="<?php if(isset($id)) echo $id; ?>">
-	</fieldset>
-
-	<fieldset>
-		<legend>Programme and Year</legend>
-		<label for="programme">Programme:</label>
-		<select name="programme">
-		<?php
-			$programmes = array('B.Tech.', 'M.Tech.', 'M.C.A.', 'PhD', 'Diploma');
-			foreach ($programmes as $programme) {
-				echo '<option value="'.$programme.'">'.$programme.'</option>';
+						<select class="form-control" name="programme">
+				<?php
+			$query = "SELECT programme_id, programme_name FROM programmes";
+			$programmes = mysqli_query($dbc, $query);
+			while ($programme = mysqli_fetch_array($programmes)) {
+				echo '<option value="'.$programme['programme_id'].'">'.$programme['programme_name'].'</option>';
 			}
 		?>
-		</select>
-		<label for="year">Year:</label>
-		<select name="year">
-		<?php
-			$years = array('First', 'Second', 'Third', 'Fourth');
-			foreach ($years as $year) {
-				echo '<option value="'.$year.'">'.$year.'</option>';
+			</select>
+
+					</div>
+					<div class="col-sm-4">
+						<label for="year">Year:</label>
+
+						<select class="form-control" name="year">
+				<?php
+			$years = array('First' => 1, 'Second' => 2, 'Third' => 3, 'Fourth' => 4);
+			foreach ($years as $key => $value) {
+				echo '<option value="'.$value.'">'.$key.'</option>';
 			}
 		?>
-		</select>
-	</fieldset>
+			</select>
+					</div>
+				</div>
+				<br>
+				<!--branch-->
+				<div class="form-group">
 
-	<fieldset>
-		<legend>Branch</legend>
-		<select name="branch">
-		<?php
+					<div class="row">
+
+						<div class="col-sm-4">
+							<label for="branch">Branch:</label>
+							<select class="form-control" name="branch">
+			<?php
 			$query = "SELECT branch_id, branch_name FROM branches";
-			$rows = mysqli_query($dbc, $query);
-			while($row = mysqli_fetch_array($rows)) {
-				echo '<option value="'.$row['branch_id'].'">'.$row['branch_name'].'</option>';
+			$branches = mysqli_query($dbc, $query);
+			while($branch = mysqli_fetch_array($branches)) {
+				echo '<option value="'.$branch['branch_id'].'">'.$branch['branch_name'].'</option>';
 			}
 		?>
 		</select>
-	</fieldset>
-
-	<!--Do the rest-->
-	<br>
-	<input type="submit" name="submit" value="Create account">
-</form>
-</div>
-
-<!--Render footer-->
-<?php
+						</div>
+					</div>
+					<br>
+					<br>
+					<button class="btn btn-lg btn-success" type="submit" name="submit" value="Create an account">Create an account</button>
+					</form>
+				</div>
+			</div>
+			</form>
+		</div>
+		</form>
+		</div>
+		</div>
+		<!--Render footer-->
+		<?php
 	require_once(__DIR__ . '/../includes/footer.php');
 ?>
